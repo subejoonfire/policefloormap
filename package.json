@@ -1,0 +1,31 @@
+{
+  "name": "develop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start",
+    "lint": "biome check",
+    "format": "biome format --write",
+    "clear-cache": "node clear-cache.js",
+    "fresh": "npm run clear-cache && npm run dev"
+  },
+  "dependencies": {
+    "@types/leaflet": "^1.9.20",
+    "axios": "^1.11.0",
+    "leaflet": "^1.9.4",
+    "mysql2": "^3.14.3",
+    "next": "15.5.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-leaflet": "^5.0.0",
+    "sqlite3": "^5.1.7",
+    "swr": "^2.3.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.0",
+    "@tailwindcss/postcss": "^4",
+    "tailwindcss": "^4"
+  }
+}
