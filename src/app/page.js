@@ -4,8 +4,6 @@ import dynamic from "next/dynamic";
 import useImageCache from "../hooks/useImageCache";
 import useDateTime from "../hooks/useDateTime";
 
-import { slideshowData } from "../data/rooms";
-
 const LeafletMap = dynamic(() => import("../components/LeafletMap"), {
   ssr: false,
   loading: () => (
@@ -37,14 +35,45 @@ export default function Home() {
   }, []);
   const [selectedStore, setSelectedStore] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
+
+  // Slideshow data - images only
+  const slideshowData = [
+    { fileName: "68a85171d8a30-foto1.jpg", type: "image" },
+    { fileName: "68a8517b63dd9-foto2.jpg", type: "image" },
+    { fileName: "68a8518551f5a-foto3.jpg", type: "image" },
+    { fileName: "68a851ff32052-foto4.jpg", type: "image" },
+  ];
   const [isSlideshowClosed, setIsSlideshowClosed] = useState(false);
   const [currentSlide, setCurrentSlide] = useState(0);
-  const slideshowItemRefs = useRef([]);
-
-  const storeListRef = useRef(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const slideTimeoutRef = useRef(null);
+  const storeListRef = useRef(null);
 
   const { date, time } = useDateTime();
+
+  // Handle fullscreen changes
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
+  const toggleFullscreen = async () => {
+    try {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {
+      console.error(`Error toggling fullscreen: ${err.message}`);
+    }
+  };
   const { preloadImages, isLoading, loadingProgress } = useImageCache();
 
   // Preload images
@@ -137,35 +166,16 @@ export default function Home() {
     requestAnimationFrame(animateScroll);
   };
 
-  // Slideshow
+  // Slideshow effect: handle images with 5 second interval
   useEffect(() => {
-    if (slideshowData.length === 0) return;
-    clearTimeout(slideTimeoutRef.current);
-    const current = slideshowItemRefs.current[currentSlide];
-    // Jika slide berupa video, play otomatis dan lanjut ke slide berikutnya saat selesai
-    if (current && current.tagName === "VIDEO") {
-      current.currentTime = 0;
-      current.loop = false;
-      const onEnded = () => {
-        setCurrentSlide((prev) => (prev + 1) % slideshowData.length);
-      };
-      current.addEventListener("ended", onEnded, { once: true });
-      current.play().catch(() => {
-        setTimeout(
-          () => setCurrentSlide((prev) => (prev + 1) % slideshowData.length),
-          10000
-        );
-      });
-      return () => {
-        current.removeEventListener("ended", onEnded);
-      };
-    } else {
-      slideTimeoutRef.current = setTimeout(() => {
-        setCurrentSlide((prev) => (prev + 1) % slideshowData.length);
-      }, 10000);
-      return () => clearTimeout(slideTimeoutRef.current);
-    }
-  }, [currentSlide, slideshowData]);
+    if (slideshowData.length === 0 || isSlideshowClosed) return;
+
+    const interval = setInterval(() => {
+      setCurrentSlide((prevSlide) => (prevSlide + 1) % slideshowData.length);
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [slideshowData.length, isSlideshowClosed]);
 
   const filteredData = getFilteredData();
 
@@ -215,6 +225,16 @@ export default function Home() {
           />
         </div>
         <div className="header-right-controls">
+          {!isFullscreen && (
+            <button
+              id="fullscreenToggle"
+              onClick={toggleFullscreen}
+              className="icon-btn"
+              title="Masuk Mode Fullscreen"
+            >
+              <i className="fas fa-expand"></i>
+            </button>
+          )}
           <button
             id="refreshButton"
             onClick={() => window.location.reload()}
@@ -265,19 +285,6 @@ export default function Home() {
               isSlideshowClosed ? "closed" : ""
             }`}
           >
-            {/* Toggle Button */}
-            <button
-              id="slideshowToggleButton"
-              onClick={() => setIsSlideshowClosed(!isSlideshowClosed)}
-              title="Tutup/Buka Slideshow"
-            >
-              <i
-                className={`fas ${
-                  isSlideshowClosed ? "fa-chevron-up" : "fa-chevron-down"
-                }`}
-              ></i>
-            </button>
-
             {/* Directory Panel */}
             <div className="directory-panel">
               <nav className="sb-sidenav accordion" id="sidenavAccordion">
@@ -387,47 +394,51 @@ export default function Home() {
           </div>
         </div>
       </div>
-      {/* Slideshow Panel di bawah edge layar */}
-      <div
-        className={`slideshow-panel${isSlideshowClosed ? " closed" : ""}`}
-        style={{
-          position: "fixed",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          zIndex: 2000,
-        }}
+      {/* Slideshow Toggle Button (selalu di atas slideshow) */}
+      <button
+        id="slideshowToggleButton"
+        className={isSlideshowClosed ? "closed" : ""}
+        onClick={() => setIsSlideshowClosed(!isSlideshowClosed)}
+        title="Tutup/Buka Slideshow"
       >
+        <i
+          className={`fas ${
+            isSlideshowClosed ? "fa-chevron-up" : "fa-chevron-down"
+          }`}
+        ></i>
+      </button>
+
+      {/* Slideshow Panel di bawah edge layar */}
+      <div className={`slideshow-panel${isSlideshowClosed ? " closed" : ""}`}>
         <div className="slideshow-container">
-          {slideshowData.map((media, idx) => (
-            <div
-              key={media.fileName}
-              className={`slideshow-item${
-                currentSlide === idx ? " active" : ""
-              }`}
-              style={{ zIndex: currentSlide === idx ? 1 : 0 }}
-            >
-              {media.type === "video" ? (
-                <video
-                  ref={(el) => (slideshowItemRefs.current[idx] = el)}
-                  src={`/assets/slideshow/${media.fileName}`}
-                  className="slideshow-media"
-                  muted
-                  playsInline
-                  preload="auto"
-                  style={{ width: "100%", height: "100%" }}
-                />
-              ) : (
+          {slideshowData.length > 0 ? (
+            slideshowData.map((media, idx) => (
+              <div
+                key={media.fileName}
+                className={`slideshow-item${
+                  currentSlide === idx ? " active" : ""
+                }`}
+              >
                 <img
-                  ref={(el) => (slideshowItemRefs.current[idx] = el)}
                   src={`/assets/slideshow/${media.fileName}`}
                   alt={media.fileName}
                   className="slideshow-media"
-                  style={{ width: "100%", height: "100%" }}
+                  onError={(e) => {
+                    console.error(`Error loading image: ${media.fileName}`);
+                    e.target.src = "/assets/img/default-icon.png";
+                  }}
                 />
-              )}
+              </div>
+            ))
+          ) : (
+            <div className="slideshow-item active">
+              <img
+                src="/assets/img/default-icon.png"
+                alt="No media available"
+                className="slideshow-media"
+              />
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>

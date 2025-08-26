@@ -70,7 +70,9 @@ body {
     align-items: center;
     justify-content: center;
     gap: 20px;
-    flex: 1;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
     color: white !important;
 }
 
@@ -94,6 +96,7 @@ body {
     font-family: Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
     letter-spacing: 2px;
     font-weight: 500;
+    text-align: center;
 }
 
 .header-left-controls {
@@ -128,6 +131,10 @@ body {
 .icon-btn {
     background: none;
     border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s ease;
     color: white;
     font-size: 2rem;
     cursor: pointer;
@@ -405,47 +412,19 @@ main.map-area {
 }
 
 .slideshow-panel {
-    flex: 1;
-    overflow: hidden;
-    padding: 10px;
-    box-sizing: border-box;
-    background-color: #222222;
-    transition: transform 0.5s ease-in-out;
-}
-
-.slideshow-panel.closed {
-    transform: translateY(100%);
-}
-
-#slideshowToggleButton {
     position: absolute;
-    bottom: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 60px;
-    height: 30px;
-    border-radius: 15px;
-    background-color: #ffffff;
-    border: 1px solid #dcdcdc;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    z-index: 1050;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.2rem;
-    color: #333333;
-    cursor: pointer;
-    transition: transform 0.2s;
-    padding: 0;
-    opacity: 1;
-}
-
-#slideshowToggleButton i {
-    transition: transform 0.3s ease;
-}
-
-#slideshowToggleButton i.rotate-anim {
-    transform: rotate(180deg);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 500px;
+    z-index: 3000;
+    box-shadow: 0 -2px 16px rgba(0, 0, 0, 0.4);
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    padding-top: 24px;
+    overflow: hidden;
+    background-color: #222222;
+    transition: height 0.5s cubic-bezier(0.4, 0, 0.2, 1), padding-top 0.5s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .slideshow-container {
@@ -453,8 +432,6 @@ main.map-area {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    border-radius: 8px;
-    background-color: #222222;
 }
 
 .slideshow-item {
@@ -472,12 +449,52 @@ main.map-area {
     z-index: 1;
 }
 
-.slideshow-item img,
-.slideshow-item video {
+.slideshow-media {
     width: 100%;
     height: 100%;
     object-fit: contain;
     object-position: center;
+}
+
+.slideshow-panel.closed {
+    height: 0 !important;
+    padding-top: 0 !important;
+}
+
+#slideshowToggleButton {
+    position: fixed;
+    left: 50%;
+    /* Tombol akan turun naik sesuai panel, 500px saat open, 0px saat closed */
+    bottom: calc(var(--slideshow-panel-height, 500px) + 10px);
+    transform: translateX(-50%);
+    width: 60px;
+    height: 30px;
+    border-radius: 15px;
+    background-color: #ffffff;
+    border: 1px solid #dcdcdc;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 3001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    color: #333333;
+    cursor: pointer;
+    transition: bottom 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    padding: 0;
+    opacity: 1;
+}
+
+#slideshowToggleButton.closed {
+    bottom: 10px !important;
+}
+
+#slideshowToggleButton i {
+    transition: transform 0.3s ease;
+}
+
+#slideshowToggleButton i.rotate-anim {
+    transform: rotate(180deg);
 }
 
 @keyframes revealFromCenter {
