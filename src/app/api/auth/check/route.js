@@ -2,9 +2,9 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const session = cookies().get("user_session");
+  const session = cookies().get("pb_auth");
 
-  if (!session || session.value !== "authenticated") {
+  if (!session || !session.value) {
     return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
