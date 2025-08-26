@@ -1,47 +1,56 @@
-import mysql from "mysql2/promise";
 import fs from "fs";
 import path from "path";
+import { NextResponse } from "next/server";
+import { verify } from "jsonwebtoken";
+
+const SECRET_KEY = process.env.JWT_SECRET || "your-secret-key-here";
+
+// Helper function to read JSON data
+async function readJsonData() {
+  const jsonPath = path.join(process.cwd(), "src/data/polres_berau_floor.json");
+  const jsonData = await fs.promises.readFile(jsonPath, "utf-8");
+  const data = JSON.parse(jsonData);
+
+  // Find the relevant tables
+  const rooms = data.find((table) => table.name === "the_room")?.data || [];
+  const groups = data.find((table) => table.name === "the_group")?.data || [];
+
+  return { rooms, groups };
+}
 
 export async function GET(request) {
-  const dbConfig = {
-    host: "localhost",
-    user: "root",
-    password: "", // ganti jika ada password
-    database: "polres_berau_floor",
-  };
   try {
-    const connection = await mysql.createConnection(dbConfig);
-    const [rows] = await connection.execute(`
-      SELECT 
-        r.Id,
-        r.TheFloorId,
-        r.GroupId,
-        r.Name,
-        r.NameXcoor,
-        r.NameYcoor,
-        r.IsHide,
-        r.JsonCoordinates,
-        r.ShadingColor,
-        r.Description,
-        r.IsPoliceRoom,
-        r.Logopath,
-        g.Name AS GroupName
-      FROM the_room r
-      LEFT JOIN the_group g ON r.GroupId = g.Id
-      ORDER BY 
-        CASE 
-          WHEN r.IsPoliceRoom = 2 THEN 0
-          WHEN r.IsPoliceRoom = 1 THEN 1
-          WHEN r.IsPoliceRoom = 3 THEN 2
-          ELSE 3
-        END,
-        r.Id ASC
-    `);
-    await connection.end();
+    const { rooms, groups } = await readJsonData();
+
+    // Combine room data with group data
+    const rows = rooms.map((room) => ({
+      ...room,
+      GroupName: groups.find((g) => g.Id === room.GroupId)?.Name || null,
+    }));
+
+    // Sort rooms based on IsPoliceRoom
+    rows.sort((a, b) => {
+      const getPriority = (isPoliceRoom) => {
+        switch (parseInt(isPoliceRoom)) {
+          case 2:
+            return 0;
+          case 1:
+            return 1;
+          case 3:
+            return 2;
+          default:
+            return 3;
+        }
+      };
+      return (
+        getPriority(a.IsPoliceRoom) - getPriority(b.IsPoliceRoom) ||
+        parseInt(a.Id) - parseInt(b.Id)
+      );
+    });
 
     const basePath = path.join(process.cwd(), "public/assets/img/the_room/");
     const defaultIcon = "/assets/img/default-icon.png";
-    const rooms = rows.map((row) => {
+    const formattedRooms = rows.map((row) => {
       let mapCoords = null;
       try {
         const coords = JSON.parse(row.JsonCoordinates);
@@ -93,10 +102,7 @@ export async function GET(request) {
         mapCoords,
       };
     });
-    return new Response(JSON.stringify(rooms), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return NextResponse.json(formattedRooms);
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
