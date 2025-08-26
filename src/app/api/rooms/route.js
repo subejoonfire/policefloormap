@@ -1,9 +1,6 @@
 import fs from "fs";
 import path from "path";
 import { NextResponse } from "next/server";
-import { verify } from "jsonwebtoken";
-
-const SECRET_KEY = process.env.JWT_SECRET || "your-secret-key-here";
 
 // Helper function to read JSON data
 async function readJsonData() {

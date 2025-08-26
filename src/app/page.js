@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import useImageCache from "../hooks/useImageCache";
 import useDateTime from "../hooks/useDateTime";
@@ -20,15 +20,18 @@ export default function Home() {
   const [activeFloor, setActiveFloor] = useState("1");
   const [activeTabFilter, setActiveTabFilter] = useState("all");
   const [allStoreData, setAllStoreData] = useState([]);
+  const [roomsLoaded, setRoomsLoaded] = useState(false);
   // Fetch data ruangan dari API
   useEffect(() => {
     async function fetchRooms() {
       try {
-        const res = await fetch("/api/rooms");
+        const res = await fetch("/api/rooms", { cache: "no-store" });
         const data = await res.json();
         setAllStoreData(data);
       } catch (err) {
         setAllStoreData([]);
+      } finally {
+        setRoomsLoaded(true);
       }
     }
     fetchRooms();
@@ -36,17 +39,14 @@ export default function Home() {
   const [selectedStore, setSelectedStore] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
 
-  // Slideshow data - images only
-  const slideshowData = [
-    { fileName: "68a85171d8a30-foto1.jpg", type: "image" },
-    { fileName: "68a8517b63dd9-foto2.jpg", type: "image" },
-    { fileName: "68a8518551f5a-foto3.jpg", type: "image" },
-    { fileName: "68a851ff32052-foto4.jpg", type: "image" },
-  ];
+  // Slideshow data - now fetched from API (supports image & video)
+  const [slideshowData, setSlideshowData] = useState([]);
+  const [slideshowLoaded, setSlideshowLoaded] = useState(false);
   const [isSlideshowClosed, setIsSlideshowClosed] = useState(false);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const slideTimeoutRef = useRef(null);
+  const slideshowContainerRef = useRef(null);
   const storeListRef = useRef(null);
 
   const { date, time } = useDateTime();
@@ -76,25 +76,84 @@ export default function Home() {
   };
   const { preloadImages, isLoading, loadingProgress } = useImageCache();
 
-  // Preload images
+  // Fetch slideshow media
   useEffect(() => {
-    const imagesToPreload = [
-      "/peta/lantai_1.svg",
-      "/peta/lantai_2.svg",
-      "/peta/lantai_3.svg",
-      "/peta/lantai_4.svg",
-      ...allStoreData.map((room) => room.logo).filter(Boolean),
-      ...slideshowData.map((media) => `/assets/slideshow/${media.fileName}`),
-      "/images/here.gif",
-      "/images/pin_map.gif",
-      "/images/polri.png",
-      "/images/Berau.png",
-    ];
-    preloadImages(imagesToPreload);
-  }, [allStoreData, preloadImages]);
+    async function fetchSlideshow() {
+      try {
+        const res = await fetch("/api/slideshow?action=get", { cache: "no-store" });
+        const data = await res.json();
+        // sort by display_order already handled in API, but ensure
+        const sorted = Array.isArray(data)
+          ? data.slice().sort((a, b) => (parseInt(a.display_order || 0) - parseInt(b.display_order || 0)))
+          : [];
+        setSlideshowData(sorted);
+      } catch {
+        setSlideshowData([]);
+      } finally {
+        setSlideshowLoaded(true);
+      }
+    }
+    fetchSlideshow();
+  }, []);
 
-  // Filter data
-  const getFilteredData = () => {
+  // Bootstrap: preload images ONCE after both rooms and slideshow are loaded
+  const [bootstrapped, setBootstrapped] = useState(false);
+  useEffect(() => {
+    if (!roomsLoaded || !slideshowLoaded || bootstrapped) return;
+    (async () => {
+      try {
+        const imagesToPreload = [
+          "/peta/lantai_1.svg",
+          "/peta/lantai_2.svg",
+          "/peta/lantai_3.svg",
+          "/peta/lantai_4.svg",
+          ...allStoreData.map((room) => room.logo).filter(Boolean),
+          ...slideshowData.filter((m) => m.file_type === "image").map((media) => `/assets/slideshow/${media.file_name}`),
+          "/images/here.gif",
+          "/images/pin_map.gif",
+          "/images/polri.png",
+          "/images/Berau.png",
+        ];
+        // Deduplicate
+        const uniqueImages = Array.from(new Set(imagesToPreload));
+
+        // Preload into memory (ensures decode + render-ready)
+        await preloadImages(uniqueImages);
+
+        // Add <link rel="preload"> hints to the document head
+        try {
+          const head = document.head;
+          uniqueImages.forEach((href) => {
+            const link = document.createElement("link");
+            link.rel = "preload";
+            link.as = "image";
+            link.href = href;
+            head.appendChild(link);
+          });
+        } catch {}
+
+        // Aggressive pre-cache using Cache API for instant subsequent access
+        if (typeof window !== "undefined" && "caches" in window) {
+          try {
+            const cache = await caches.open("polres-berau-static-v1");
+            await Promise.all(
+              uniqueImages.map(async (url) => {
+                try {
+                  const res = await fetch(url, { cache: "reload" });
+                  if (res.ok) await cache.put(url, res.clone());
+                } catch {}
+              })
+            );
+          } catch {}
+        }
+      } finally {
+        setBootstrapped(true);
+      }
+    })();
+  }, [roomsLoaded, slideshowLoaded, bootstrapped, allStoreData, slideshowData, preloadImages]);
+
+  // Filter data (memoized for performance)
+  const filteredData = useMemo(() => {
     let filtered = allStoreData.slice();
     const trimmedSearch = searchTerm.trim().toLowerCase();
     if (trimmedSearch) {
@@ -104,28 +163,23 @@ export default function Home() {
           (store.description &&
             store.description.toLowerCase().includes(trimmedSearch))
       );
-      // Saat search aktif, tab/floor filter tidak berlaku (seperti original)
       return filtered;
     }
     if (activeTabFilter === "everything") {
-      // Tampilkan semua data
       return filtered;
     } else if (activeTabFilter === "2" || activeTabFilter === "0") {
-      // Satuan (2) atau Umum (0)
       filtered = filtered.filter(
         (store) => String(store.isPoliceRoom) === String(activeTabFilter)
       );
       return filtered;
     } else if (activeTabFilter === "all") {
-      // Default: filter by lantai
       filtered = filtered.filter(
         (store) => String(store.floor) === String(activeFloor)
       );
       return filtered;
     }
-    // Fallback: tampilkan semua
     return filtered;
-  };
+  }, [allStoreData, searchTerm, activeTabFilter, activeFloor]);
 
   const handleFloorButtonClick = (floor) => {
     if (activeTabFilter !== "all") setActiveTabFilter("all");
@@ -150,7 +204,6 @@ export default function Home() {
         setActiveTabFilter("all");
       }
     }
-    // scrollToTop(storeListRef.current, 500); // Dihilangkan agar scroll tetap
   };
 
   const scrollToTop = (element, duration) => {
@@ -166,20 +219,55 @@ export default function Home() {
     requestAnimationFrame(animateScroll);
   };
 
-  // Slideshow effect: handle images with 5 second interval
+  // Slideshow effect: 10s per image; videos play fully then advance
   useEffect(() => {
     if (slideshowData.length === 0 || isSlideshowClosed) return;
 
-    const interval = setInterval(() => {
-      setCurrentSlide((prevSlide) => (prevSlide + 1) % slideshowData.length);
-    }, 5000);
+    if (slideTimeoutRef.current) {
+      clearTimeout(slideTimeoutRef.current);
+      slideTimeoutRef.current = null;
+    }
 
-    return () => clearInterval(interval);
-  }, [slideshowData.length, isSlideshowClosed]);
+    const container = slideshowContainerRef.current;
+    if (!container) return;
 
-  const filteredData = getFilteredData();
+    const items = container.querySelectorAll(".slideshow-item");
+    if (!items.length) return;
 
-  if (isLoading) {
+    const activeItem = items[currentSlide];
+    const video = activeItem ? activeItem.querySelector("video") : null;
+
+    const moveToNext = () => {
+      setCurrentSlide((prev) => (prev + 1) % slideshowData.length);
+    };
+
+    if (video) {
+      try {
+        video.currentTime = 0;
+        video.muted = true;
+        video.play().catch(() => {
+          slideTimeoutRef.current = setTimeout(moveToNext, 10000);
+        });
+      } catch {
+        slideTimeoutRef.current = setTimeout(moveToNext, 10000);
+      }
+      const onEnded = () => {
+        video.removeEventListener("ended", onEnded);
+        moveToNext();
+      };
+      video.addEventListener("ended", onEnded, { once: true });
+      return () => video.removeEventListener("ended", onEnded);
+    } else {
+      slideTimeoutRef.current = setTimeout(moveToNext, 10000);
+    }
+
+    return () => {
+      if (slideTimeoutRef.current) clearTimeout(slideTimeoutRef.current);
+    };
+  }, [slideshowData, currentSlide, isSlideshowClosed]);
+
+  // Use bootstrapped to show loading only once
+  if (!bootstrapped) {
     return (
       <div className="loading-screen">
         <div className="loading-content">
@@ -410,24 +498,34 @@ export default function Home() {
 
       {/* Slideshow Panel di bawah edge layar */}
       <div className={`slideshow-panel${isSlideshowClosed ? " closed" : ""}`}>
-        <div className="slideshow-container">
+        <div className="slideshow-container" ref={slideshowContainerRef}>
           {slideshowData.length > 0 ? (
             slideshowData.map((media, idx) => (
               <div
-                key={media.fileName}
+                key={media.id || media.file_name || idx}
                 className={`slideshow-item${
                   currentSlide === idx ? " active" : ""
                 }`}
               >
-                <img
-                  src={`/assets/slideshow/${media.fileName}`}
-                  alt={media.fileName}
-                  className="slideshow-media"
-                  onError={(e) => {
-                    console.error(`Error loading image: ${media.fileName}`);
-                    e.target.src = "/assets/img/default-icon.png";
-                  }}
-                />
+                {media.file_type === "video" ? (
+                  <video
+                    src={`/assets/slideshow/${media.file_name}`}
+                    muted
+                    playsInline
+                    autoPlay
+                    controls={false}
+                  />
+                ) : (
+                  <img
+                    src={`/assets/slideshow/${media.file_name}`}
+                    alt={media.file_name}
+                    className="slideshow-media"
+                    onError={(e) => {
+                      console.error(`Error loading image: ${media.file_name}`);
+                      e.target.src = "/assets/img/default-icon.png";
+                    }}
+                  />
+                )}
               </div>
             ))
           ) : (

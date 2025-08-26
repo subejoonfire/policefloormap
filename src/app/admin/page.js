@@ -1,296 +1,258 @@
 "use client";
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
+import Sortable from "sortablejs";
+import Swal from "sweetalert2";
 
 export default function AdminPage() {
-  const [mediaItems, setMediaItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [currentSlide, setCurrentSlide] = useState(0);
-  const [draggedItem, setDraggedItem] = useState(null);
-  const router = useRouter();
+	const [mediaItems, setMediaItems] = useState([]);
+	const [uploading, setUploading] = useState(false);
+	const [savingOrder, setSavingOrder] = useState(false);
+	const listRef = useRef(null);
+	const demoRef = useRef(null);
+	const demoIndexRef = useRef(0);
+	const demoTimeoutRef = useRef(null);
 
-  useEffect(() => {
-    fetchMedia();
-    // Check authentication
-    checkAuth();
-  }, []);
+	async function fetchMedia() {
+		try {
+			const res = await fetch("/api/slideshow?action=get", { cache: "no-store" });
+			const data = await res.json();
+			setMediaItems(data);
+			setTimeout(runDemoSlideshow, 0);
+		} catch (e) {
+			Swal.fire("Error", "Gagal memuat daftar media.", "error");
+		}
+	}
 
-  const checkAuth = async () => {
-    try {
-      const res = await fetch("/api/auth/check");
-      if (!res.ok) {
-        router.push("/login");
-      }
-    } catch (error) {
-      router.push("/login");
-    }
-  };
+	useEffect(() => {
+		// auth check
+		(async () => {
+			try {
+				const res = await fetch("/api/auth/check", { cache: "no-store" });
+				if (!res.ok) {
+					window.location.href = "/login";
+					return;
+				}
+				fetchMedia();
+			} catch {
+				window.location.href = "/login";
+			}
+		})();
+	}, []);
 
-  const fetchMedia = async () => {
-    try {
-      const res = await fetch("/api/slideshow?action=get");
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
-      setMediaItems(data);
-    } catch (error) {
-      setError("Failed to load media items");
-    } finally {
-      setLoading(false);
-    }
-  };
+	useEffect(() => {
+		if (listRef.current) {
+			Sortable.create(listRef.current, {
+				handle: ".handle",
+				animation: 150,
+				ghostClass: "sortable-ghost",
+				onEnd: () => {
+					// keep state order in sync with DOM order
+					const ids = Array.from(listRef.current.querySelectorAll(".media-item")).map((el) => el.getAttribute("data-id"));
+					setMediaItems((prev) => ids.map((id) => prev.find((p) => String(p.id) === String(id))));
+				},
+			});
+		}
+		return () => {
+			if (demoTimeoutRef.current) clearTimeout(demoTimeoutRef.current);
+		};
+	}, [listRef.current]);
 
-  const handleUpload = async (e) => {
-    e.preventDefault();
-    const formData = new FormData(e.target);
+	async function handleUpload(e) {
+		e.preventDefault();
+		const file = e.target.mediaFile.files[0];
+		if (!file) return;
+		setUploading(true);
+		const formData = new FormData();
+		formData.append("mediaFile", file);
+		try {
+			const res = await fetch("/api/slideshow?action=upload", { method: "POST", body: formData });
+			const result = await res.json();
+			if (result.success) {
+				Swal.fire("Berhasil!", "File berhasil diupload.", "success");
+				e.target.reset();
+				fetchMedia();
+			} else {
+				Swal.fire("Gagal!", `Gagal upload: ${result.message}`, "error");
+			}
+		} catch {
+			Swal.fire("Gagal!", "Terjadi kesalahan saat upload.", "error");
+		} finally {
+			setUploading(false);
+		}
+	}
 
-    try {
-      const res = await fetch("/api/slideshow?action=upload", {
-        method: "POST",
-        body: formData,
-      });
+	async function handleDelete(id) {
+		const confirm = await Swal.fire({
+			title: "Hapus media ini?",
+			icon: "warning",
+			showCancelButton: true,
+			confirmButtonColor: "#C0A062",
+			confirmButtonText: "Ya, hapus",
+			cancelButtonText: "Batal",
+		});
+		if (!confirm.isConfirmed) return;
+		const res = await fetch("/api/slideshow?action=delete", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ id }),
+		});
+		const result = await res.json();
+		if (result.success) {
+			Swal.fire("Terhapus", "Media berhasil dihapus.", "success");
+			fetchMedia();
+		} else {
+			Swal.fire("Gagal", result.message || "Gagal menghapus.", "error");
+		}
+	}
 
-      if (!res.ok) throw new Error("Upload failed");
+	async function handleReorderSave() {
+		setSavingOrder(true);
+		const ids = mediaItems.map((m) => m.id);
+		const res = await fetch("/api/slideshow?action=reorder", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ order: ids }),
+		});
+		const result = await res.json();
+		setSavingOrder(false);
+		if (result.success) {
+			Swal.fire("Tersimpan", "Urutan berhasil disimpan.", "success");
+			fetchMedia();
+		} else {
+			Swal.fire("Gagal", result.message || "Gagal menyimpan urutan.", "error");
+		}
+	}
 
-      await fetchMedia();
-      e.target.reset();
-    } catch (error) {
-      setError("Failed to upload file");
-    }
-  };
+	function runDemoSlideshow() {
+		const container = demoRef.current;
+		if (!container) return;
+		const slides = container.querySelectorAll(".slideshow-item");
+		if (!slides.length) return;
+		clearTimeout(demoTimeoutRef.current);
+		slides.forEach((slide, i) => slide.classList.toggle("active", i === demoIndexRef.current));
+		const activeItem = slides[demoIndexRef.current];
+		const video = activeItem.querySelector("video");
+		const moveToNext = () => {
+			demoIndexRef.current = (demoIndexRef.current + 1) % slides.length;
+			runDemoSlideshow();
+		};
+		if (video) {
+			video.loop = false;
+			video.currentTime = 0;
+			const onVideoEnd = () => {
+				video.removeEventListener("ended", onVideoEnd);
+				moveToNext();
+			};
+			video.addEventListener("ended", onVideoEnd, { once: true });
+			video.play().catch(() => moveToNext());
+		} else {
+			demoTimeoutRef.current = setTimeout(moveToNext, 10000);
+		}
+	}
 
-  const handleDelete = async (mediaId) => {
-    if (!confirm("Are you sure you want to delete this item?")) return;
+	return (
+		<>
+			<nav className="navbar navbar-expand-lg navbar-dark">
+				<div className="container-fluid">
+					<a className="navbar-brand" href="#">
+						<Image src="/images/polri.png" alt="Logo Polri" width={60} height={60} />
+						<h1>
+							<div>ADMIN PANEL POLRES BERAU</div>
+							<div>KALIMANTAN TIMUR</div>
+						</h1>
+						<Image src="/images/Berau.png" alt="Logo Berau" width={60} height={60} />
+					</a>
+					<a href="/api/auth/logout" className="btn btn-danger logout-btn">Logout</a>
+				</div>
+			</nav>
 
-    try {
-      const res = await fetch("/api/slideshow?action=delete&id=" + mediaId, {
-        method: "DELETE",
-      });
+			<div className="admin-main-container">
+				<div className="admin-sidebar">
+					<div className="upload-section">
+						<div className="card">
+							<div className="card-header">
+								<h3><i className="fas fa-upload" /> Upload Media Baru</h3>
+							</div>
+							<div className="card-body">
+								<form id="uploadForm" onSubmit={handleUpload} encType="multipart/form-data">
+									<div className="mb-3">
+										<label htmlFor="mediaFile" className="form-label">Pilih file (JPG, PNG, MP4)</label>
+										<input className="form-control" type="file" id="mediaFile" name="mediaFile" accept="image/jpeg,image/png,video/mp4" required />
+									</div>
+									<button type="submit" className="btn btn-primary" disabled={uploading}>{uploading ? "Mengupload..." : "Upload File"}</button>
+								</form>
+							</div>
+						</div>
+					</div>
 
-      if (!res.ok) throw new Error("Delete failed");
-      await fetchMedia();
-    } catch (error) {
-      setError("Failed to delete item");
-    }
-  };
+					<div className="demo-section">
+						<div className="card">
+							<div className="card-header">
+								<h3><i className="fas fa-play-circle" /> Pratinjau Slideshow</h3>
+							</div>
+							<div className="card-body">
+								<div id="demoSlideshow" className="slideshow-container" ref={demoRef}>
+									{mediaItems.length === 0 ? (
+										<p className="text-white text-center small p-3">Tidak ada media untuk ditampilkan.</p>
+									) : (
+										mediaItems.map((item, idx) => (
+											<div key={item.id} className={`slideshow-item ${idx === 0 ? "active" : ""}`}>
+												{item.file_type === "video" ? (
+													<video src={`/assets/slideshow/${item.file_name}`} muted />
+												) : (
+													<img src={`/assets/slideshow/${item.file_name}`} alt={item.file_name} />
+												)}
+											</div>
+										))
+									)}
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
 
-  const handleDragStart = (index) => {
-    setDraggedItem(index);
-  };
-
-  const handleDragEnd = () => {
-    setDraggedItem(null);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (dropIndex) => {
-    if (draggedItem === null) return;
-    if (draggedItem === dropIndex) return;
-
-    const newItems = [...mediaItems];
-    const [movedItem] = newItems.splice(draggedItem, 1);
-    newItems.splice(dropIndex, 0, movedItem);
-    setMediaItems(newItems);
-    setDraggedItem(null);
-  };
-
-  const handleReorder = async (newOrder) => {
-    try {
-      const res = await fetch("/api/slideshow?action=reorder", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ order: newOrder }),
-      });
-
-      if (!res.ok) throw new Error("Reorder failed");
-
-      await fetchMedia();
-    } catch (error) {
-      setError("Failed to reorder items");
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await fetch("/api/auth/logout", { method: "POST" });
-      router.push("/login");
-    } catch (error) {
-      setError("Logout failed");
-    }
-  };
-
-  // Slideshow preview functionality
-  useEffect(() => {
-    if (mediaItems.length === 0) return;
-
-    const timer = setInterval(() => {
-      setCurrentSlide((prev) => (prev + 1) % mediaItems.length);
-    }, 5000);
-
-    return () => clearInterval(timer);
-  }, [mediaItems]);
-
-  if (loading) return <div>Loading...</div>;
-
-  return (
-    <div className="min-h-screen bg-gray-100">
-      <nav className="bg-blue-800 text-white p-4">
-        <div className="container mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <Image
-              src="/images/polri.png"
-              alt="Logo Polri"
-              width={50}
-              height={50}
-            />
-            <div>
-              <h1 className="text-xl font-bold">ADMIN PANEL POLRES BERAU</h1>
-              <div className="text-sm">KALIMANTAN TIMUR</div>
-            </div>
-            <Image
-              src="/images/Berau.png"
-              alt="Logo Berau"
-              width={50}
-              height={50}
-            />
-          </div>
-          <button
-            onClick={handleLogout}
-            className="bg-red-600 px-4 py-2 rounded hover:bg-red-700"
-          >
-            Logout
-          </button>
-        </div>
-      </nav>
-
-      <div className="container mx-auto mt-8 p-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {/* Upload Section */}
-          <div className="col-span-1">
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-xl font-semibold mb-4">
-                <i className="fas fa-upload mr-2"></i> Upload Media Baru
-              </h3>
-              <form onSubmit={handleUpload}>
-                <input
-                  type="file"
-                  name="media"
-                  accept="image/*,video/*"
-                  className="w-full mb-4"
-                  required
-                />
-                <button
-                  type="submit"
-                  className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700"
-                >
-                  Upload
-                </button>
-              </form>
-            </div>
-
-            {/* Preview Section */}
-            <div className="bg-white rounded-lg shadow p-6 mt-6">
-              <h3 className="text-xl font-semibold mb-4">
-                <i className="fas fa-play-circle mr-2"></i> Pratinjau Slideshow
-              </h3>
-              <div className="aspect-video bg-gray-900 relative overflow-hidden rounded">
-                {mediaItems.length > 0 && (
-                  <div className="absolute inset-0">
-                    {mediaItems.map((item, index) => (
-                      <div
-                        key={item.id}
-                        className={
-                          "absolute inset-0 transition-opacity duration-500 " +
-                          (index === currentSlide ? "opacity-100" : "opacity-0")
-                        }
-                      >
-                        {item.type === "video" ? (
-                          <video
-                            src={"/assets/slideshow/" + item.filename}
-                            className="w-full h-full object-cover"
-                            autoPlay
-                            muted
-                            loop
-                          />
-                        ) : (
-                          <div className="relative w-full h-full">
-                            <Image
-                              src={"/assets/slideshow/" + item.filename}
-                              alt={item.filename}
-                              fill
-                              sizes="(max-width: 768px) 100vw, 33vw"
-                              className="object-cover"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Media List Section */}
-          <div className="col-span-1 md:col-span-2">
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-xl font-semibold mb-2">
-                <i className="fas fa-list mr-2"></i> Daftar Media Slideshow
-              </h3>
-              <p className="text-sm text-gray-500 mb-4">
-                Seret dan lepas media untuk mengubah urutan, lalu klik simpan.
-              </p>
-
-              {error && (
-                <div className="bg-red-100 text-red-600 p-3 rounded mb-4">
-                  {error}
-                </div>
-              )}
-
-              <div className="space-y-2">
-                {mediaItems.map((item, index) => (
-                  <div
-                    key={item.id}
-                    className={
-                      "flex items-center gap-4 p-3 rounded border transition-colors " +
-                      (draggedItem === index ? "bg-blue-50" : "bg-gray-50")
-                    }
-                    draggable="true"
-                    onDragStart={() => handleDragStart(index)}
-                    onDragEnd={handleDragEnd}
-                    onDragOver={handleDragOver}
-                    onDrop={() => handleDrop(index)}
-                  >
-                    <div className="cursor-move">
-                      <i className="fas fa-grip-vertical text-gray-400"></i>
-                    </div>
-                    <div className="flex-1">{item.filename}</div>
-                    <button
-                      onClick={() => handleDelete(item.id)}
-                      className="text-red-600 hover:text-red-800"
-                    >
-                      <i className="fas fa-trash"></i>
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              <button
-                onClick={handleReorder}
-                className="mt-4 w-full bg-green-600 text-white py-2 rounded hover:bg-green-700"
-              >
-                <i className="fas fa-save mr-2"></i> Simpan Urutan
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+				<div className="admin-content">
+					<div className="list-section">
+						<div className="card">
+							<div className="card-header">
+								<h3 className="mb-0"><i className="fas fa-list" /> Daftar Media Slideshow</h3>
+								<p className="text-muted mb-0 small">Seret dan lepas media untuk mengubah urutan, lalu klik simpan.</p>
+							</div>
+							<div className="card-body" id="slideshow-list-container">
+								<div id="slideshow-list" ref={listRef}>
+									{mediaItems.map((item) => (
+										<div
+											className="media-item"
+											key={item.id}
+											data-id={item.id}
+										>
+											<i className="fas fa-grip-vertical handle" />
+											{item.file_type === "video" ? (
+												<video src={`/assets/slideshow/${item.file_name}`} muted />
+											) : (
+												<img src={`/assets/slideshow/${item.file_name}`} alt={item.file_name} />
+											)}
+											<div className="info">{item.file_name}</div>
+											<div className="actions">
+												<button className="btn btn-danger btn-sm delete-btn" onClick={() => handleDelete(item.id)}>
+													<i className="fas fa-trash" />
+												</button>
+											</div>
+										</div>
+									))}
+								</div>
+							</div>
+							<div className="card-footer">
+								<button id="saveOrderBtn" className="btn btn-success w-100" onClick={handleReorderSave} disabled={savingOrder}>
+									<i className="fas fa-save" /> {savingOrder ? "Menyimpan..." : "Simpan Urutan"}
+								</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</>
+	);
 }

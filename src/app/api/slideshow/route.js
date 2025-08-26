@@ -2,170 +2,126 @@ import { NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
 
-// Helper to read JSON file
-const readJsonDb = () => {
-  const filePath = path.join(process.cwd(), "src/data/polres_berau_floor.json");
-  const fileContent = fs.readFileSync(filePath, "utf8");
-  return JSON.parse(fileContent);
-};
+const JSON_PATH = path.join(process.cwd(), "src/data/polres_berau_floor.json");
+const UPLOAD_DIR = path.join(process.cwd(), "public/assets/slideshow");
 
-// Helper to write JSON file
-const writeJsonDb = (data) => {
-  const filePath = path.join(process.cwd(), "src/data/polres_berau_floor.json");
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-};
+function ensureUploadDir() {
+	if (!fs.existsSync(UPLOAD_DIR)) {
+		fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+	}
+}
 
-// Get slideshow media data from JSON
-const getMediaData = () => {
-  const db = readJsonDb();
-  const mediaTable = db.find((item) => item.name === "slideshow_media");
-  return mediaTable?.data || [];
-};
+function readDb() {
+	const raw = fs.readFileSync(JSON_PATH, "utf8");
+	return JSON.parse(raw);
+}
 
-// Update slideshow media data in JSON
-const updateMediaData = (newData) => {
-  const db = readJsonDb();
-  const mediaTableIndex = db.findIndex(
-    (item) => item.name === "slideshow_media"
-  );
-  if (mediaTableIndex !== -1) {
-    db[mediaTableIndex].data = newData;
-    writeJsonDb(db);
-  }
-};
+function writeDb(db) {
+	fs.writeFileSync(JSON_PATH, JSON.stringify(db, null, 2));
+}
+
+function getTable(db, name) {
+	return db.find((t) => t.type === "table" && t.name === name);
+}
+
+function getSlideshowTable(db) {
+	let table = getTable(db, "slideshow_media");
+	if (!table) {
+		table = { type: "table", name: "slideshow_media", database: "polres_berau_floor", data: [] };
+		db.push(table);
+	}
+	if (!Array.isArray(table.data)) table.data = [];
+	return table;
+}
 
 export async function GET(request) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
-
-  if (action === "get") {
-    try {
-      const media = getMediaData();
-      return NextResponse.json(media);
-    } catch (error) {
-      return NextResponse.json(
-        { error: "Failed to fetch media" },
-        { status: 500 }
-      );
-    }
-  }
-
-  return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+	const { searchParams } = new URL(request.url);
+	const action = searchParams.get("action") || "get";
+	try {
+		if (action === "get") {
+			const db = readDb();
+			const slideshow = getSlideshowTable(db).data.slice();
+			// Sort by numeric display_order ascending, fallback 0
+			slideshow.sort((a, b) => (parseInt(a.display_order || 0) - parseInt(b.display_order || 0)));
+			return NextResponse.json(slideshow);
+		}
+		return NextResponse.json({ success: false, message: "Aksi tidak valid." }, { status: 400 });
+	} catch (e) {
+		return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+	}
 }
 
 export async function POST(request) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
+	const { searchParams } = new URL(request.url);
+	const action = searchParams.get("action");
+	try {
+		if (action === "upload") {
+			const formData = await request.formData();
+			const file = formData.get("mediaFile");
+			if (!file || typeof file === "string") {
+				return NextResponse.json({ success: false, message: "File tidak ditemukan" }, { status: 400 });
+			}
+			ensureUploadDir();
+			const originalName = file.name.replace(/\s+/g, "_");
+			const arrayBuffer = await file.arrayBuffer();
+			// Persist file with original name prefixed by timestamp to avoid collisions
+			const safeName = `${Date.now().toString(16)}-${originalName}`;
+			fs.writeFileSync(path.join(UPLOAD_DIR, safeName), Buffer.from(arrayBuffer));
 
-  if (action === "upload") {
-    try {
-      const formData = await request.formData();
-      const file = formData.get("media");
+			const ext = path.extname(safeName).toLowerCase();
+			const mediaType = [".jpg", ".jpeg", ".png", ".gif", ".webp"].includes(ext) ? "image" : "video";
 
-      if (!file) {
-        return NextResponse.json(
-          { error: "No file uploaded" },
-          { status: 400 }
-        );
-      }
+			const db = readDb();
+			const table = getSlideshowTable(db);
+			const maxId = table.data.reduce((m, it) => Math.max(m, parseInt(it.id || 0)), 0);
+			const maxOrder = table.data.reduce((m, it) => Math.max(m, parseInt(it.display_order || 0)), 0);
+			const newItem = {
+				id: String(maxId + 1),
+				file_name: safeName,
+				file_type: mediaType,
+				display_order: String(maxOrder + 1),
+			};
+			table.data.push(newItem);
+			writeDb(db);
+			return NextResponse.json({ success: true });
+		}
 
-      // Handle file upload
-      const bytes = await file.arrayBuffer();
-      const buffer = Buffer.from(bytes);
+		if (action === "delete") {
+			const body = await request.json();
+			const id = String(body.id);
+			const db = readDb();
+			const table = getSlideshowTable(db);
+			const idx = table.data.findIndex((i) => String(i.id) === id);
+			if (idx === -1) return NextResponse.json({ success: false, message: "ID tidak ditemukan" }, { status: 404 });
+			const item = table.data[idx];
+			const filepath = path.join(UPLOAD_DIR, item.file_name);
+			if (fs.existsSync(filepath)) {
+				try { fs.unlinkSync(filepath); } catch {}
+			}
+			table.data.splice(idx, 1);
+			writeDb(db);
+			return NextResponse.json({ success: true });
+		}
 
-      // Generate unique filename
-      const timestamp = Date.now();
-      const filename = timestamp + "-" + file.name;
+		if (action === "reorder") {
+			const body = await request.json();
+			const order = Array.isArray(body.order) ? body.order.map(String) : [];
+			const db = readDb();
+			const table = getSlideshowTable(db);
+			const idToItem = new Map(table.data.map((i) => [String(i.id), i]));
+			order.forEach((id, idx) => {
+				const it = idToItem.get(id);
+				if (it) it.display_order = String(idx + 1);
+			});
+			// normalize ordering for any leftover
+			let next = table.data.reduce((m, it) => Math.max(m, parseInt(it.display_order || 0)), 0) + 1;
+			table.data.forEach((it) => { if (!it.display_order) it.display_order = String(next++); });
+			writeDb(db);
+			return NextResponse.json({ success: true });
+		}
 
-      // Save file
-      const uploadDir = path.join(process.cwd(), "public/assets/slideshow");
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-
-      fs.writeFileSync(path.join(uploadDir, filename), buffer);
-
-      // Update JSON
-      const media = getMediaData();
-      const newMedia = {
-        id: timestamp.toString(),
-        filename,
-        type: file.type.startsWith("video/") ? "video" : "image",
-        display_order: media.length + 1,
-      };
-
-      media.push(newMedia);
-      updateMediaData(media);
-
-      return NextResponse.json({ success: true, media: newMedia });
-    } catch (error) {
-      return NextResponse.json(
-        { error: "Failed to upload file" },
-        { status: 500 }
-      );
-    }
-  }
-
-  if (action === "reorder") {
-    try {
-      const { order } = await request.json();
-      const media = getMediaData();
-
-      // Reorder based on the new order
-      const reorderedMedia = order.map((id, index) => {
-        const item = media.find((m) => m.id === id);
-        return { ...item, display_order: index + 1 };
-      });
-
-      updateMediaData(reorderedMedia);
-      return NextResponse.json({ success: true });
-    } catch (error) {
-      return NextResponse.json(
-        { error: "Failed to reorder media" },
-        { status: 500 }
-      );
-    }
-  }
-
-  return NextResponse.json({ error: "Invalid action" }, { status: 400 });
-}
-
-export async function DELETE(request) {
-  const { searchParams } = new URL(request.url);
-  const action = searchParams.get("action");
-  const id = searchParams.get("id");
-
-  if (action === "delete" && id) {
-    try {
-      const media = getMediaData();
-      const mediaItem = media.find((m) => m.id === id);
-
-      if (mediaItem) {
-        // Delete file
-        const filePath = path.join(
-          process.cwd(),
-          "public/assets/slideshow",
-          mediaItem.filename
-        );
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
-        }
-
-        // Update JSON
-        const updatedMedia = media.filter((m) => m.id !== id);
-        updateMediaData(updatedMedia);
-
-        return NextResponse.json({ success: true });
-      }
-
-      return NextResponse.json({ error: "Media not found" }, { status: 404 });
-    } catch (error) {
-      return NextResponse.json(
-        { error: "Failed to delete media" },
-        { status: 500 }
-      );
-    }
-  }
-
-  return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+		return NextResponse.json({ success: false, message: "Aksi tidak valid." }, { status: 400 });
+	} catch (e) {
+		return NextResponse.json({ success: false, message: e.message }, { status: 500 });
+	}
 }
